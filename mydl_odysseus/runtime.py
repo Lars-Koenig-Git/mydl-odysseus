@@ -10,25 +10,33 @@ from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import RuntimeConfig
+from .mcp_probe import McpReadiness
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeState:
     config: RuntimeConfig
     model_loaded: bool = False
-    hub_mcp_tools_ready: bool = False
-    social_mcp_tools_ready: bool = False
+    mcp_readiness: McpReadiness | None = None
 
     @property
     def model_configured(self) -> bool:
         return self.config.model_path.is_file()
 
     @property
+    def hub_mcp_tools_ready(self) -> bool:
+        return self.mcp_readiness.hub.ready if self.mcp_readiness is not None else False
+
+    @property
+    def social_mcp_tools_ready(self) -> bool:
+        return self.mcp_readiness.social.ready if self.mcp_readiness is not None else False
+
+    @property
     def brain_store_configured(self) -> bool:
         return True
 
     def health_payload(self) -> dict[str, bool | str]:
-        payload: dict[str, bool | str] = {
+        return {
             "status": "not_ready",
             "model_configured": self.model_configured,
             "model_loaded": self.model_loaded,
@@ -36,24 +44,17 @@ class RuntimeState:
             "social_mcp_tools_ready": self.social_mcp_tools_ready,
             "brain_store_configured": self.brain_store_configured,
         }
-        if all(
-            payload[name] is True
-            for name in (
-                "model_configured",
-                "model_loaded",
-                "hub_mcp_tools_ready",
-                "social_mcp_tools_ready",
-                "brain_store_configured",
-            )
-        ):
-            payload["status"] = "ok"
-        return payload
 
 
-def create_mydl_runtime_app(config: RuntimeConfig) -> FastAPI:
-    state = RuntimeState(config=config)
+def create_mydl_runtime_app(
+    config: RuntimeConfig,
+    *,
+    mcp_readiness: McpReadiness | None = None,
+) -> FastAPI:
+    state = RuntimeState(config=config, mcp_readiness=mcp_readiness)
     app = FastAPI(title="MyDL Odysseus Runtime", version="0.1.0")
     app.state.mydl_runtime = state
+    app.state.mydl_mcp_readiness = mcp_readiness
 
     @app.get("/health")
     async def health() -> JSONResponse:

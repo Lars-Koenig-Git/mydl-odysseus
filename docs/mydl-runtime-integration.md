@@ -12,8 +12,14 @@ python -m mydl_odysseus --config /path/to/odysseus.toml --check-config
 
 Server mode binds only to the configured loopback address and prints
 `ODYSSEUS_NOT_READY` with the selected bind port. It must not print
-`ODYSSEUS_READY` until a real model loader and MCP readiness probes have been
-implemented.
+`ODYSSEUS_READY` until a real model loader has been implemented.
+
+On startup, server mode probes the configured Hub and Social MCP URLs with the
+configured MCP bearer. The probes call only `initialize` and `tools/list`, require
+HTTP 200 JSON-RPC object responses, and mark each MCP readiness flag true only
+when the expected Odysseus tool names are present. Probe failures are reported
+only through the boolean `/health` flags; bearer values and config secret labels
+must not appear in stdout, stderr, `/health`, or iframe HTML.
 
 The runtime accepts only the MyDL brain-store key id
 `mydl.odysseus.brain-store.v1`. It rejects raw brain-key style fields such as

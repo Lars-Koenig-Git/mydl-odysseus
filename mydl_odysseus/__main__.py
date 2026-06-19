@@ -7,7 +7,8 @@ import socket
 import sys
 from pathlib import Path
 
-from .config import ConfigError, load_runtime_config, sanitized_config_error
+from .config import ConfigError, RuntimeConfig, load_runtime_config, sanitized_config_error
+from .mcp_probe import probe_configured_mcp_tools
 from .runtime import create_mydl_runtime_app
 
 
@@ -40,11 +41,12 @@ def main(argv: list[str] | None = None) -> int:
     return _serve(config)
 
 
-def _serve(config: object) -> int:
+def _serve(config: RuntimeConfig) -> int:
     import uvicorn
 
-    app = create_mydl_runtime_app(config)  # type: ignore[arg-type]
-    with _bound_socket(config.bind_address, config.port) as sock:  # type: ignore[attr-defined]
+    mcp_readiness = probe_configured_mcp_tools(config)
+    app = create_mydl_runtime_app(config, mcp_readiness=mcp_readiness)
+    with _bound_socket(config.bind_address, config.port) as sock:
         host, port = sock.getsockname()[:2]
         print(
             f"ODYSSEUS_NOT_READY bind={host}:{port} reason=model_loader_unimplemented",
