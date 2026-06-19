@@ -94,6 +94,28 @@ def test_health_reports_mcp_flags_true_when_fake_endpoints_pass(tmp_path: Path) 
     assert payload["social_mcp_tools_ready"] is True
 
 
+def test_health_reports_mcp_flags_true_when_fake_endpoints_pass_after_retry(tmp_path: Path) -> None:
+    routes = {
+        "/hub/ai/mcp": Route(HUB_REQUIRED_TOOLS, tools_statuses=(503, 200)),
+        "/social/ai/mcp": Route(SOCIAL_REQUIRED_TOOLS, initialize_statuses=(503, 200)),
+    }
+    with fake_mcp_server(routes, bearer=PROBE_MCP_SECRET) as (base_url, _state):
+        config = _config(
+            tmp_path,
+            hub_mcp_url=f"{base_url}/hub/ai/mcp",
+            social_mcp_url=f"{base_url}/social/ai/mcp",
+            mcp_bearer=PROBE_MCP_SECRET,
+        )
+        readiness = probe_configured_mcp_tools(config)
+        client = TestClient(create_mydl_runtime_app(config, mcp_readiness=readiness))
+        payload = client.get("/health").json()
+
+    assert payload["status"] == "not_ready"
+    assert payload["model_loaded"] is False
+    assert payload["hub_mcp_tools_ready"] is True
+    assert payload["social_mcp_tools_ready"] is True
+
+
 def test_health_reports_only_failed_mcp_flag_false(tmp_path: Path) -> None:
     routes = {
         "/hub/ai/mcp": Route(HUB_REQUIRED_TOOLS),

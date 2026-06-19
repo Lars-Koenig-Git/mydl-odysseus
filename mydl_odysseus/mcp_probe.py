@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import time
 import urllib.error
 import urllib.request
 from dataclasses import dataclass
@@ -33,7 +34,9 @@ SOCIAL_REQUIRED_TOOLS = frozenset(
     },
 )
 
-DEFAULT_TIMEOUT_SECONDS = 3.0
+DEFAULT_TIMEOUT_SECONDS = 5.0
+DEFAULT_MAX_ATTEMPTS = 3
+DEFAULT_RETRY_BACKOFF_SECONDS = 0.25
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,12 +108,16 @@ def probe_mcp_tools(
     *,
     endpoint: str,
     timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> McpProbeResult:
     init_status, init_payload = _post_json_rpc(
         url,
         bearer,
         _json_rpc(f"{endpoint}-initialize", "initialize"),
         timeout_seconds=timeout_seconds,
+        max_attempts=max_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
     )
     init_failure = _response_failure_reason(init_status, init_payload)
     if init_failure is not None:
@@ -123,6 +130,8 @@ def probe_mcp_tools(
         bearer,
         _json_rpc(f"{endpoint}-tools", "tools/list"),
         timeout_seconds=timeout_seconds,
+        max_attempts=max_attempts,
+        retry_backoff_seconds=retry_backoff_seconds,
     )
     tools_failure = _response_failure_reason(tools_status, tools_payload)
     if tools_failure is not None:
@@ -158,18 +167,41 @@ def _post_json_rpc(
     payload: dict[str, Any],
     *,
     timeout_seconds: float,
+    max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+    retry_backoff_seconds: float = DEFAULT_RETRY_BACKOFF_SECONDS,
 ) -> tuple[int, dict[str, Any]]:
     data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
-    request = urllib.request.Request(
-        url,
-        data=data,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {bearer}",
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        },
-    )
+    attempts = max(1, max_attempts)
+    last_status = 0
+    last_payload: dict[str, Any] = {}
+    for attempt in range(attempts):
+        request = urllib.request.Request(
+            url,
+            data=data,
+            method="POST",
+            headers={
+                "Authorization": f"Bearer {bearer}",
+                "Content-Type": "application/json",
+                "Accept": "application/json",
+            },
+        )
+        status, response_payload = _post_json_rpc_once(
+            request,
+            timeout_seconds=timeout_seconds,
+        )
+        last_status = status
+        last_payload = response_payload
+        if not _is_retryable_status(status) or attempt == attempts - 1:
+            return status, response_payload
+        time.sleep(retry_backoff_seconds)
+    return last_status, last_payload
+
+
+def _post_json_rpc_once(
+    request: urllib.request.Request,
+    *,
+    timeout_seconds: float,
+) -> tuple[int, dict[str, Any]]:
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
             return response.status, _decode_json_object(response.read())
@@ -196,6 +228,10 @@ def _response_failure_reason(status: int, payload: dict[str, Any]) -> str | None
     if "error" in payload:
         return "json_rpc_error"
     return None
+
+
+def _is_retryable_status(status: int) -> bool:
+    return status == 0 or 500 <= status <= 599
 
 
 def _json_rpc(request_id: str, method: str) -> dict[str, str]:
