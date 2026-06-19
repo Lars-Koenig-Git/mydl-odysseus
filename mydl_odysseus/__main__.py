@@ -78,7 +78,7 @@ def _serve(config: RuntimeConfig) -> int:
 
 def _not_ready_reason(model_reason: str, health: dict[str, bool | str]) -> str:
     if health.get("model_configured") is not True:
-        return "model_file_missing"
+        return "managed_model_missing"
     if health.get("model_loaded") is not True:
         return model_reason
     if health.get("hub_mcp_tools_ready") is not True:

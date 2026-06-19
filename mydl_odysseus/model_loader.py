@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .config import RuntimeConfig
+from .config import RuntimeConfig, is_existing_managed_model
 
 
 @dataclass(frozen=True, slots=True)
@@ -39,13 +39,14 @@ class ModelLoadResult:
 def load_configured_model(config: RuntimeConfig) -> ModelLoadResult:
     """Initialize the configured GGUF model with a real local backend.
 
-    File existence is necessary but never sufficient for readiness. The runtime
-    is ready only after the backend constructor returns a live model object.
+    Managed Odysseus Cookbook/HF cache provenance and file existence are
+    necessary but never sufficient for readiness. The runtime is ready only
+    after the backend constructor returns a live model object.
     """
 
     model_path = config.model_path
-    if not model_path.is_file():
-        return ModelLoadResult.failure("model_file_missing")
+    if not is_existing_managed_model(config):
+        return ModelLoadResult.failure("managed_model_missing")
 
     try:
         llama_cpp = importlib.import_module("llama_cpp")

@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from fastapi import FastAPI, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 
-from .config import RuntimeConfig
+from .config import RuntimeConfig, is_existing_managed_model
 from .mcp_probe import McpReadiness
 from .model_loader import ModelLoadResult
 
@@ -22,7 +22,7 @@ class RuntimeState:
 
     @property
     def model_configured(self) -> bool:
-        return self.config.model_path.is_file()
+        return is_existing_managed_model(self.config)
 
     @property
     def model_loaded(self) -> bool:

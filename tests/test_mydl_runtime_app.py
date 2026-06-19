@@ -9,7 +9,11 @@ from pathlib import Path
 from fastapi.testclient import TestClient
 
 import mydl_odysseus.__main__ as cli
-from mydl_odysseus.config import BRAIN_STORE_KEY_ID, RuntimeConfig
+from mydl_odysseus.config import (
+    BRAIN_STORE_KEY_ID,
+    MODEL_SOURCE_ODYSSEUS_COOKBOOK,
+    RuntimeConfig,
+)
 from mydl_odysseus.mcp_probe import (
     HUB_REQUIRED_TOOLS,
     SOCIAL_REQUIRED_TOOLS,
@@ -22,6 +26,8 @@ from test_mydl_mcp_probe import Route, fake_mcp_server
 
 MCP_SECRET = "mcp-runtime-secret"
 BRAIN_SECRET = "brain-runtime-secret"
+MODEL_REPO_ID = "Qwen/Qwen3-4B-GGUF"
+MODEL_FILE = "Qwen3-4B-Q4_K_M.gguf"
 FORBIDDEN_OUTPUT = (
     MCP_SECRET,
     BRAIN_SECRET,
@@ -37,6 +43,17 @@ FORBIDDEN_OUTPUT = (
 )
 
 
+def _model_path(tmp_path: Path) -> Path:
+    return (
+        tmp_path
+        / "hub"
+        / "models--Qwen--Qwen3-4B-GGUF"
+        / "snapshots"
+        / "abc123"
+        / MODEL_FILE
+    )
+
+
 def _config(
     tmp_path: Path,
     *,
@@ -44,12 +61,18 @@ def _config(
     social_mcp_url: str = "http://127.0.0.1:8010/social/ai/mcp",
     mcp_bearer: str = MCP_SECRET,
 ) -> RuntimeConfig:
-    model = tmp_path / "model.gguf"
+    model = _model_path(tmp_path)
+    model.parent.mkdir(parents=True, exist_ok=True)
     model.write_bytes(b"model")
     return RuntimeConfig(
         bind_address="127.0.0.1",
         port=0,
+        model_source=MODEL_SOURCE_ODYSSEUS_COOKBOOK,
+        model_repo_id=MODEL_REPO_ID,
+        model_file=MODEL_FILE,
         model_path=model,
+        model_cache_root=None,
+        model_snapshot_path=None,
         hub_mcp_url=hub_mcp_url,
         social_mcp_url=social_mcp_url,
         mcp_bearer=mcp_bearer,
@@ -347,6 +370,9 @@ def _write_config(tmp_path: Path, **overrides: object) -> Path:
             [
                 f'bind_address = "{config.bind_address}"',
                 f"port = {config.port}",
+                f'model_source = "{config.model_source}"',
+                f'model_repo_id = "{config.model_repo_id}"',
+                f'model_file = "{config.model_file}"',
                 f'model_path = "{config.model_path}"',
                 f'hub_mcp_url = "{config.hub_mcp_url}"',
                 f'social_mcp_url = "{config.social_mcp_url}"',

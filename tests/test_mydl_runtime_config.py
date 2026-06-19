@@ -9,20 +9,38 @@ import pytest
 from mydl_odysseus.config import (
     BRAIN_STORE_KEY_ID,
     FORBIDDEN_RAW_SECRET_KEYS,
+    MODEL_SOURCE_ODYSSEUS_COOKBOOK,
     ConfigError,
     load_runtime_config,
 )
 
 MCP_SECRET = "mcp-token-secret-value"
 BRAIN_SECRET = "brain-store-token-secret-value"
+MODEL_REPO_ID = "Qwen/Qwen3-4B-GGUF"
+MODEL_FILE = "Qwen3-4B-Q4_K_M.gguf"
+
+
+def _model_path(tmp_path: Path, *, file_name: str = MODEL_FILE) -> Path:
+    return (
+        tmp_path
+        / "hub"
+        / "models--Qwen--Qwen3-4B-GGUF"
+        / "snapshots"
+        / "abc123"
+        / file_name
+    )
 
 
 def _write_config(tmp_path: Path, **overrides: object) -> Path:
-    model = tmp_path / "model.gguf"
+    model = _model_path(tmp_path)
+    model.parent.mkdir(parents=True, exist_ok=True)
     model.write_bytes(b"model")
     values: dict[str, object] = {
         "bind_address": "127.0.0.1",
         "port": 0,
+        "model_source": MODEL_SOURCE_ODYSSEUS_COOKBOOK,
+        "model_repo_id": MODEL_REPO_ID,
+        "model_file": MODEL_FILE,
         "model_path": str(model),
         "hub_mcp_url": "http://127.0.0.1:8000/hub/ai/mcp",
         "social_mcp_url": "http://localhost:8000/social/ai/mcp",
@@ -53,12 +71,22 @@ def test_valid_config_parsing(tmp_path: Path) -> None:
 
     assert config.bind_address == "127.0.0.1"
     assert config.port == 0
+    assert config.model_source == MODEL_SOURCE_ODYSSEUS_COOKBOOK
+    assert config.model_repo_id == MODEL_REPO_ID
+    assert config.model_file == MODEL_FILE
     assert config.model_path.is_file()
     assert config.brain_store_key_id == BRAIN_STORE_KEY_ID
 
 
 def test_model_path_existence_is_checked_by_loader_not_config(tmp_path: Path) -> None:
-    missing = tmp_path / "missing.gguf"
+    missing = (
+        tmp_path
+        / "hub"
+        / "models--Qwen--Qwen3-4B-GGUF"
+        / "snapshots"
+        / "missing"
+        / MODEL_FILE
+    )
 
     config = load_runtime_config(_write_config(tmp_path, model_path=missing))
 
@@ -69,6 +97,55 @@ def test_model_path_existence_is_checked_by_loader_not_config(tmp_path: Path) ->
 def test_missing_required_fields_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
         load_runtime_config(_write_config(tmp_path, hub_mcp_url=None))
+
+
+def test_arbitrary_model_path_rejected_even_when_file_exists(tmp_path: Path) -> None:
+    model = tmp_path / "model.gguf"
+    model.write_bytes(b"model")
+
+    with pytest.raises(ConfigError):
+        load_runtime_config(_write_config(tmp_path, model_path=model))
+
+
+def test_projector_model_file_rejected(tmp_path: Path) -> None:
+    model = _model_path(tmp_path, file_name="mmproj-qwen.gguf")
+    model.parent.mkdir(parents=True, exist_ok=True)
+    model.write_bytes(b"projector")
+
+    with pytest.raises(ConfigError):
+        load_runtime_config(
+            _write_config(
+                tmp_path,
+                model_file="mmproj-qwen.gguf",
+                model_path=model,
+            ),
+        )
+
+
+def test_model_snapshot_path_can_prove_provenance(tmp_path: Path) -> None:
+    snapshot = (
+        tmp_path
+        / "hub"
+        / "models--Qwen--Qwen3-4B-GGUF"
+        / "snapshots"
+        / "abc123"
+    )
+    model = snapshot / MODEL_FILE
+    model.parent.mkdir(parents=True, exist_ok=True)
+    model.write_bytes(b"model")
+
+    config = load_runtime_config(
+        _write_config(tmp_path, model_path=model, model_snapshot_path=snapshot),
+    )
+
+    assert config.model_snapshot_path == snapshot
+
+
+def test_model_cache_root_must_contain_model_path(tmp_path: Path) -> None:
+    outside = tmp_path / "outside"
+
+    with pytest.raises(ConfigError):
+        load_runtime_config(_write_config(tmp_path, model_cache_root=outside))
 
 
 @pytest.mark.parametrize(
