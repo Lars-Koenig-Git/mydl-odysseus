@@ -11,8 +11,28 @@ python -m mydl_odysseus --config /path/to/odysseus.toml --check-config
 ```
 
 Server mode binds only to the configured loopback address and prints
-`ODYSSEUS_NOT_READY` with the selected bind port. It must not print
-`ODYSSEUS_READY` until a real model loader has been implemented.
+`ODYSSEUS_READY` with the selected bind port only when `/health` would return
+`status: ok`. Otherwise it prints `ODYSSEUS_NOT_READY` with a short secret-free
+reason.
+
+The runtime loads local GGUF models through `llama-cpp-python` (`import
+llama_cpp`) when server mode starts. The model file must exist, but file
+existence alone is not readiness: `model_loaded` becomes true only after the
+backend constructor returns a live model object that is kept on runtime state.
+If `llama_cpp` is not installed, or if backend initialization fails, the process
+continues serving with `status: not_ready` and `model_loaded: false`.
+
+Install the optional GGUF backend only on hosts that should load local models:
+
+```bash
+pip install -r requirements-optional.txt
+```
+
+MyDL can launch the fork with the stable wrapper:
+
+```bash
+MYDL_ODYSSEUS_BINARY=/path/to/mydl-odysseus/scripts/mydl-odysseus-runtime
+```
 
 On startup, server mode probes the configured Hub and Social MCP URLs with the
 configured MCP bearer. The probes call only `initialize` and `tools/list`, require

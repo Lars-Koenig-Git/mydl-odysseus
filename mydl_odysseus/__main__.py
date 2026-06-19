@@ -9,6 +9,7 @@ from pathlib import Path
 
 from .config import ConfigError, RuntimeConfig, load_runtime_config, sanitized_config_error
 from .mcp_probe import probe_configured_mcp_tools
+from .model_loader import load_configured_model
 from .runtime import create_mydl_runtime_app
 
 
@@ -45,13 +46,23 @@ def _serve(config: RuntimeConfig) -> int:
     import uvicorn
 
     mcp_readiness = probe_configured_mcp_tools(config)
-    app = create_mydl_runtime_app(config, mcp_readiness=mcp_readiness)
+    model_load_result = load_configured_model(config)
+    app = create_mydl_runtime_app(
+        config,
+        mcp_readiness=mcp_readiness,
+        model_load_result=model_load_result,
+    )
     with _bound_socket(config.bind_address, config.port) as sock:
         host, port = sock.getsockname()[:2]
-        print(
-            f"ODYSSEUS_NOT_READY bind={host}:{port} reason=model_loader_unimplemented",
-            flush=True,
-        )
+        health = app.state.mydl_runtime.health_payload()
+        if health["status"] == "ok":
+            print(f"ODYSSEUS_READY bind={host}:{port}", flush=True)
+        else:
+            print(
+                f"ODYSSEUS_NOT_READY bind={host}:{port} "
+                f"reason={_not_ready_reason(model_load_result.reason, health)}",
+                flush=True,
+            )
         server = uvicorn.Server(
             uvicorn.Config(
                 app,
@@ -63,6 +74,20 @@ def _serve(config: RuntimeConfig) -> int:
         )
         server.run(sockets=[sock])
     return 0
+
+
+def _not_ready_reason(model_reason: str, health: dict[str, bool | str]) -> str:
+    if health.get("model_configured") is not True:
+        return "model_file_missing"
+    if health.get("model_loaded") is not True:
+        return model_reason
+    if health.get("hub_mcp_tools_ready") is not True:
+        return "hub_mcp_tools_not_ready"
+    if health.get("social_mcp_tools_ready") is not True:
+        return "social_mcp_tools_not_ready"
+    if health.get("brain_store_configured") is not True:
+        return "brain_store_not_configured"
+    return "runtime_not_ready"
 
 
 def _bound_socket(host: str, port: int) -> socket.socket:

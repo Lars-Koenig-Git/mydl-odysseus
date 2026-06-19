@@ -11,17 +11,26 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 from .config import RuntimeConfig
 from .mcp_probe import McpReadiness
+from .model_loader import ModelLoadResult
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeState:
     config: RuntimeConfig
-    model_loaded: bool = False
     mcp_readiness: McpReadiness | None = None
+    model_load_result: ModelLoadResult | None = None
 
     @property
     def model_configured(self) -> bool:
         return self.config.model_path.is_file()
+
+    @property
+    def model_loaded(self) -> bool:
+        return (
+            self.model_load_result.loaded
+            if self.model_load_result is not None
+            else False
+        )
 
     @property
     def hub_mcp_tools_ready(self) -> bool:
@@ -36,8 +45,15 @@ class RuntimeState:
         return True
 
     def health_payload(self) -> dict[str, bool | str]:
+        ready = (
+            self.model_configured
+            and self.model_loaded
+            and self.hub_mcp_tools_ready
+            and self.social_mcp_tools_ready
+            and self.brain_store_configured
+        )
         return {
-            "status": "not_ready",
+            "status": "ok" if ready else "not_ready",
             "model_configured": self.model_configured,
             "model_loaded": self.model_loaded,
             "hub_mcp_tools_ready": self.hub_mcp_tools_ready,
@@ -50,11 +66,19 @@ def create_mydl_runtime_app(
     config: RuntimeConfig,
     *,
     mcp_readiness: McpReadiness | None = None,
+    model_load_result: ModelLoadResult | None = None,
 ) -> FastAPI:
-    state = RuntimeState(config=config, mcp_readiness=mcp_readiness)
+    state = RuntimeState(
+        config=config,
+        mcp_readiness=mcp_readiness,
+        model_load_result=model_load_result,
+    )
     app = FastAPI(title="MyDL Odysseus Runtime", version="0.1.0")
     app.state.mydl_runtime = state
     app.state.mydl_mcp_readiness = mcp_readiness
+    app.state.mydl_loaded_model = (
+        model_load_result.model if model_load_result is not None else None
+    )
 
     @app.get("/health")
     async def health() -> JSONResponse:
@@ -142,7 +166,7 @@ def _surface_html(mode: str) -> str:
   <body>
     <main>
       <h1>Odysseus {escaped_label}</h1>
-      <p>Runtime surface is available for embedding. Model execution remains unavailable until the fork wires a real loader.</p>
+      <p>Runtime surface is available for embedding.</p>
     </main>
   </body>
 </html>

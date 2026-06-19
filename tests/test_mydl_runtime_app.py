@@ -3,6 +3,7 @@ from __future__ import annotations
 import selectors
 import subprocess
 import sys
+import types
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -14,6 +15,7 @@ from mydl_odysseus.mcp_probe import (
     SOCIAL_REQUIRED_TOOLS,
     probe_configured_mcp_tools,
 )
+from mydl_odysseus.model_loader import LoadedModel, ModelLoadResult
 from mydl_odysseus.runtime import create_mydl_runtime_app
 from test_mydl_mcp_probe import MCP_SECRET as PROBE_MCP_SECRET
 from test_mydl_mcp_probe import Route, fake_mcp_server
@@ -85,13 +87,52 @@ def test_health_reports_mcp_flags_true_when_fake_endpoints_pass(tmp_path: Path) 
             mcp_bearer=PROBE_MCP_SECRET,
         )
         readiness = probe_configured_mcp_tools(config)
-        client = TestClient(create_mydl_runtime_app(config, mcp_readiness=readiness))
+        client = TestClient(
+            create_mydl_runtime_app(
+                config,
+                mcp_readiness=readiness,
+                model_load_result=ModelLoadResult.failure("backend_unavailable"),
+            ),
+        )
         payload = client.get("/health").json()
 
     assert payload["status"] == "not_ready"
     assert payload["model_loaded"] is False
     assert payload["hub_mcp_tools_ready"] is True
     assert payload["social_mcp_tools_ready"] is True
+
+
+def test_health_reports_ok_when_model_load_and_mcp_probes_pass(tmp_path: Path) -> None:
+    routes = {
+        "/hub/ai/mcp": Route(HUB_REQUIRED_TOOLS),
+        "/social/ai/mcp": Route(SOCIAL_REQUIRED_TOOLS),
+    }
+    with fake_mcp_server(routes, bearer=PROBE_MCP_SECRET) as (base_url, _state):
+        config = _config(
+            tmp_path,
+            hub_mcp_url=f"{base_url}/hub/ai/mcp",
+            social_mcp_url=f"{base_url}/social/ai/mcp",
+            mcp_bearer=PROBE_MCP_SECRET,
+        )
+        readiness = probe_configured_mcp_tools(config)
+        model_result = ModelLoadResult.success(
+            LoadedModel(backend="test", model_path=config.model_path, handle=object()),
+        )
+        client = TestClient(
+            create_mydl_runtime_app(
+                config,
+                mcp_readiness=readiness,
+                model_load_result=model_result,
+            ),
+        )
+        payload = client.get("/health").json()
+
+    assert payload["status"] == "ok"
+    assert payload["model_configured"] is True
+    assert payload["model_loaded"] is True
+    assert payload["hub_mcp_tools_ready"] is True
+    assert payload["social_mcp_tools_ready"] is True
+    assert payload["brain_store_configured"] is True
 
 
 def test_health_reports_mcp_flags_true_when_fake_endpoints_pass_after_retry(tmp_path: Path) -> None:
@@ -211,6 +252,93 @@ def test_server_startup_with_fake_mcp_endpoints_still_prints_not_ready(
             assert PROBE_MCP_SECRET not in stderr
 
 
+def test_server_mode_prints_not_ready_when_model_load_fails(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "probe_configured_mcp_tools",
+        lambda _config: _ready_mcp(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_configured_model",
+        lambda _config: ModelLoadResult.failure("backend_unavailable"),
+    )
+    _install_uvicorn_stub(monkeypatch)
+
+    assert cli._serve(config) == 0
+    captured = capsys.readouterr()
+
+    assert captured.out.startswith("ODYSSEUS_NOT_READY bind=127.0.0.1:")
+    assert "reason=backend_unavailable" in captured.out
+    assert "ODYSSEUS_READY" not in captured.out
+    for forbidden in FORBIDDEN_OUTPUT:
+        assert forbidden not in captured.out + captured.err
+
+
+def test_server_mode_prints_ready_when_model_load_and_mcp_probes_pass(
+    tmp_path: Path,
+    monkeypatch,
+    capsys,
+) -> None:
+    config = _config(tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "probe_configured_mcp_tools",
+        lambda _config: _ready_mcp(),
+    )
+    monkeypatch.setattr(
+        cli,
+        "load_configured_model",
+        lambda _config: ModelLoadResult.success(
+            LoadedModel(backend="test", model_path=config.model_path, handle=object()),
+        ),
+    )
+    _install_uvicorn_stub(monkeypatch)
+
+    assert cli._serve(config) == 0
+    captured = capsys.readouterr()
+
+    assert captured.out.startswith("ODYSSEUS_READY bind=127.0.0.1:")
+    assert "ODYSSEUS_NOT_READY" not in captured.out
+    for forbidden in FORBIDDEN_OUTPUT:
+        assert forbidden not in captured.out + captured.err
+
+
+def test_executable_wrapper_supports_help_and_check_config(tmp_path: Path) -> None:
+    wrapper = Path(__file__).resolve().parents[1] / "scripts" / "mydl-odysseus-runtime"
+    config_path = _write_config(tmp_path)
+
+    assert wrapper.is_file()
+    assert wrapper.stat().st_mode & 0o111
+
+    help_proc = subprocess.run(
+        [str(wrapper), "--help"],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert help_proc.returncode == 0
+    assert "--config" in help_proc.stdout
+
+    check_proc = subprocess.run(
+        [str(wrapper), "--config", str(config_path), "--check-config"],
+        cwd=tmp_path,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=False,
+    )
+    assert check_proc.returncode == 0, check_proc.stderr
+    assert "valid" in check_proc.stdout
+
+
 def _write_config(tmp_path: Path, **overrides: object) -> Path:
     config = _config(tmp_path, **overrides)
     path = tmp_path / "odysseus.toml"
@@ -249,3 +377,29 @@ def _read_stdout_line(proc: subprocess.Popen[str]) -> str:
     finally:
         selector.close()
     raise AssertionError("timed out waiting for runtime banner")
+
+
+def _ready_mcp():
+    return types.SimpleNamespace(
+        hub=types.SimpleNamespace(ready=True),
+        social=types.SimpleNamespace(ready=True),
+    )
+
+
+def _install_uvicorn_stub(monkeypatch) -> None:
+    class Config:
+        def __init__(self, *args, **kwargs) -> None:
+            pass
+
+    class Server:
+        def __init__(self, _config: Config) -> None:
+            pass
+
+        def run(self, *, sockets) -> None:
+            return None
+
+    monkeypatch.setitem(
+        sys.modules,
+        "uvicorn",
+        types.SimpleNamespace(Config=Config, Server=Server),
+    )

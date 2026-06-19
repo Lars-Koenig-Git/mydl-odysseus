@@ -172,8 +172,6 @@ def _validate_port(value: Any) -> int:
 def _validate_model_path(value: Any) -> Path:
     text = _expect_non_empty_text(value, "model_path")
     path = Path(text)
-    if not path.is_file():
-        raise ConfigError("model_path must point to an existing file")
     return path
 
 

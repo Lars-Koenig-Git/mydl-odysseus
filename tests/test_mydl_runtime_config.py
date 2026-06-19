@@ -57,6 +57,15 @@ def test_valid_config_parsing(tmp_path: Path) -> None:
     assert config.brain_store_key_id == BRAIN_STORE_KEY_ID
 
 
+def test_model_path_existence_is_checked_by_loader_not_config(tmp_path: Path) -> None:
+    missing = tmp_path / "missing.gguf"
+
+    config = load_runtime_config(_write_config(tmp_path, model_path=missing))
+
+    assert config.model_path == missing
+    assert not config.model_path.exists()
+
+
 def test_missing_required_fields_rejected(tmp_path: Path) -> None:
     with pytest.raises(ConfigError):
         load_runtime_config(_write_config(tmp_path, hub_mcp_url=None))
